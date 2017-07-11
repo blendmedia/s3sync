@@ -240,84 +240,9 @@ function fullSync(cb) {
 }
 
 function handleMessage(message, done) {
-    // Parse & validate the event
-    if (!(message && message.Body)) return done (new Error("missing message body: " + message));
-    var body;
-    try {
-        body = JSON.parse(message.Body);
-    } catch(e) {
-        return done(e);
-    }
-
-    if (body && body.Event && body.Event == "s3:TestEvent") {
-        logger.trace("Got S3 test event from Amazon.  Ignoring.");
-        return done();
-    }
-
-    if (body && body.Type && body.Type == "Notification" &&
-        body.MessageId && body.Message &&
-        body.Subject && body.Subject == "Amazon S3 Notification") {
-        logger.trace("Unwrapping SNS notification");
-        try {
-            body = JSON.parse(body.Message);
-        } catch (e) {
-            return done(e);
-        }
-    }
-
-    if (!(body.Records && body.Records.length && body.Records.length == 1 &&
-          body.Records[0].eventSource == "aws:s3" && body.Records[0].s3 &&
-          body.Records[0].awsRegion && body.Records[0].eventName)) return done (new Error("invalid or missing s3 message: " + message.Body));
-
-    // Find a matching action or ignore.  We know how to deal with all actions, so error if unknown
-    var action;
-
-    if (_.startsWith(body.Records[0].eventName,"ObjectCreated"))
-        action = "ObjectCreated"
-    else if (_.startsWith(body.Records[0].eventName,"ObjectRemoved"))
-        action = "ObjectRemoved"
-    else if (_.startsWith(body.Records[0].eventName,"ReducedRedundancyLostObject"))
-        action = "ReducedRedundancyLostObject"
-
-    if (!action) {
-        done("Unknown action: " + body.Records[0].eventName)
-    }
-
-    // Find a matching config rule, or ignore if none matched
-    var rule;
-    if (action == "ObjectCreated" || action == "ObjectRemoved") {
-        var rule = _.find(config.s3sync.buckets, function(obj) {
-            return ((obj.src == body.Records[0].s3.bucket.name) &&
-                    (_.startsWith(body.Records[0].s3.object.key, obj.srcprefix)))
-            });
-    } else {
-        // TODO - generate a rule for ReducedRedundancyLostObject
-    }
-
-    if (!rule) {
-        logger.trace("No rule found.  Ignoring " + action + " event for " + body.Records[0].s3.object.key);
-        return done();
-    }
-
-    // Deal with the event
-    if (action == "ObjectCreated") {
-        var obj = syncJobObject(rule);
-        obj.src.keys[body.Records[0].s3.object.key] = {Size: body.Records[0].s3.object.size};
-        async.each(obj.dest, function(dest, cb) {
-            copyObject(obj.src, dest, body.Records[0].s3.object.key, cb);
-        }, done);
-        return;
-    }
-
-    if (action == "ObjectRemoved") {
-        var obj = syncJobObject(rule);
-        async.each(obj.dest, function(dest, cb) {
-            deleteObject(dest, body.Records[0].s3.object.key, cb);
-        }, done);
-        return;
-    }
-
-    done(new Error("Missing action"));
+  console.log("# handling message");
+  console.log(message);
+  done();
 }
 
 function sqsSync(cb) {
@@ -347,6 +272,8 @@ function shutdown() {
     shutdownfuncs.forEach(function(f){f()});
     shutdownfuncs = [];
 }
+
+console.log(config);
 
 if (config.d) {
     sqsSync(noop);
