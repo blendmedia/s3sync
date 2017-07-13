@@ -44,32 +44,40 @@ function handleMessage(message, done) {
     return done(e);
   }
 
-  console.log("Handling SQS message: ")
-  console.dir(body)
+  console.log("Handling SQS message: ");
+  console.dir(body);
 
   var s3 = new AWS.S3();
 
-  promises = body.files.map(function(file) {
-    var params = {
-      Bucket: buckets[0].dest,
-      CopySource: buckets[0].src + "/" + file,
-      Key: file
-    };
+  promises = Promise.all(
+    body.files.map(function(file) {
+      var params = {
+        Bucket: buckets[0].dest,
+        Key: file,
+        Body: s3.getObject({Bucket: buckets[0].src, Key: file}).createReadStream(),
+      };
 
-    var putObjectPromise = s3.copyObject(params).promise();
-    putObjectPromise.then(function(data) {
-      return data;
+        upload = s3.upload(params);
+        upload.on(
+          'httpUploadProgress', function(evt) {
+            console.log('Progress:', evt.loaded, '/', evt.total);
+          }
+        );
+      return upload.promise().
+        then(function() {
+          console.log("Done one file.")
+        }).catch(function(err) {
+          done(err);
+        });
+    }));
+
+  promises.
+    then(function() {
+      console.log("Done.");
+      done();
     }).catch(function(err) {
       done(err);
     });
-  });
-
-  Promise.all(promises).then(
-    function() {
-      console.log("Copied all files successfully.");
-      done();
-    }
-  );
 }
 
 function sqsSync(cb) {
