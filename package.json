@@ -23,6 +23,7 @@
     "log4js": "^0.6.26",
     "memoize": "^0.1.1",
     "moment": "^2.10.6",
+    "node-fetch": "^1.7.1",
     "rc": "^1.1.0",
     "sqs-consumer": "^2.2.0"
   }

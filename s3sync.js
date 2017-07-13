@@ -1,6 +1,7 @@
 var AWS = require('aws-sdk'),
     async = require('async'),
     config = require('./config'),
+    fetch = require('node-fetch'),
     _  = require('lodash'),
     logging = require('./logging'),
     moment = require('moment'),
@@ -48,6 +49,7 @@ function handleMessage(message, done) {
   console.dir(body);
 
   var s3 = new AWS.S3();
+  var jobId = body.job_id;
 
   promises = Promise.all(
     body.files.map(function(file) {
@@ -60,12 +62,22 @@ function handleMessage(message, done) {
         upload = s3.upload(params);
         upload.on(
           'httpUploadProgress', function(evt) {
-            console.log('Progress:', evt.loaded, '/', evt.total);
+            return fetch("http://localhost:8080/api/sync_jobs/" + jobId, {
+              method: "PUT",
+              body: "{\"completed\": false}"
+            }).then(function(res) {
+              console.log('Progress:', evt.loaded, '/', evt.total);
+            });
           }
         );
       return upload.promise().
         then(function() {
-          console.log("Done one file.")
+          return fetch("http://localhost:8080/api/sync_jobs/" + jobId, {
+            method: "PUT",
+            body: "{\"completed\": false}"
+          }).then(function(res) {
+            console.log("Done one file.")
+          });
         }).catch(function(err) {
           done(err);
         });
@@ -73,8 +85,13 @@ function handleMessage(message, done) {
 
   promises.
     then(function() {
-      console.log("Done.");
-      done();
+      return fetch("http://localhost:8080/api/sync_jobs/" + jobId, {
+        method: "PUT",
+        body: "{\"completed\": true}"
+      }).then(function(res) {
+        console.log("Done.");
+        done();
+      });
     }).catch(function(err) {
       done(err);
     });
