@@ -27,74 +27,69 @@ var commonParams = {
 var regions = config.s3sync.regions,
     buckets = config.s3sync.buckets;
 
-function handleMessage(message, done) {
-  /* Message format:
-   *
-   * { job: 'sync',
-   *   id: 123,
-   *   files: [
-   *     'aws-prefix/file.mp4',
-   *     'aws-prefix/file.png'
-   *   ]
-   * }
-   *
-   */
+async function handleMessage(message, done) {
   try {
-    body = JSON.parse(message.Body);
+    const body = JSON.parse(message.Body);
+    console.log("Handling SQS message: ");
+    console.dir(body);
+
+    const { job_id: jobId, files } = body;
+    const s3 = new AWS.S3();
+
+    for (const file of files) {
+      const params = {
+        Bucket: buckets[0].dest,
+        Key: file,
+        Body: s3.getObject({
+          Bucket: buckets[0].src,
+          Key: file,
+        }).createReadStream(),
+      };
+
+      const upload = s3.upload(params);
+      upload.on("httpUploadProgress", async evt => {
+        await fetch(`http://localhost:8080/api/sync_jobs/${jobId}`, {
+          method: "PUT",
+          headers: {
+            "content-type": "application/json",
+            "authorization": `Bearer ${config.s3sync.apiToken}`
+          },
+          body: JSON.stringify({
+            completed: false,
+          }),
+        });
+        console.log('Progress:', evt.loaded, '/', evt.total);
+      });
+
+      await upload.promise();
+      await fetch(`http://localhost:8080/api/sync_jobs/${jobId}`, {
+        method: "PUT",
+        headers: {
+          "content-type": "application/json",
+          "authorization": `Bearer ${config.s3sync.apiToken}`
+        },
+        body: JSON.stringify({
+          completed: false,
+        }),
+      });
+      console.log("Done one file.")
+    }
+
+    await fetch(`http://localhost:8080/api/sync_jobs/${jobId}`, {
+      method: "PUT", headers: {
+        "content-type": "application/json",
+        "authorization": `Bearer ${config.s3sync.apiToken}`
+      },
+      body: JSON.stringify({
+        completed: true,
+      }),
+    });
+
+    console.log("Done.");
+    done();
   } catch(e) {
     return done(e);
   }
-
-  console.log("Handling SQS message: ");
-  console.dir(body);
-
-  var s3 = new AWS.S3();
-  var jobId = body.job_id;
-
-  promises = Promise.all(
-    body.files.map(function(file) {
-      var params = {
-        Bucket: buckets[0].dest,
-        Key: file,
-        Body: s3.getObject({Bucket: buckets[0].src, Key: file}).createReadStream(),
-      };
-
-        upload = s3.upload(params);
-        upload.on(
-          'httpUploadProgress', function(evt) {
-            return fetch("http://localhost:8080/api/sync_jobs/" + jobId, {
-              method: "PUT",
-              body: "{\"completed\": false}"
-            }).then(function(res) {
-              console.log('Progress:', evt.loaded, '/', evt.total);
-            });
-          }
-        );
-      return upload.promise().
-        then(function() {
-          return fetch("http://localhost:8080/api/sync_jobs/" + jobId, {
-            method: "PUT",
-            body: "{\"completed\": false}"
-          }).then(function(res) {
-            console.log("Done one file.")
-          });
-        }).catch(function(err) {
-          done(err);
-        });
-    }));
-
-  promises.
-    then(function() {
-      return fetch("http://localhost:8080/api/sync_jobs/" + jobId, {
-        method: "PUT",
-        body: "{\"completed\": true}"
-      }).then(function(res) {
-        console.log("Done.");
-        done();
-      });
-    }).catch(function(err) {
-      done(err);
-    });
 }
 
 function sqsSync(cb) {
