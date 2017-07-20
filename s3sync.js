@@ -25,13 +25,23 @@ function setupS3Clients() {
 }
 
 async function handleMessage(message, done) {
+  var params = {
+    QueueUrl: config.s3sync.sqs.url,
+    ReceiptHandle: message.ReceiptHandle
+  };
+
+  sqsClient.deleteMessage(params, function(err, data) {
+    if (err) console.log("Was unable to delete the message from SQS");
+    else     console.log("Message deleted from SQS.");
+  });
+
   const body = JSON.parse(message.Body);
   console.log("Handling SQS message: ");
   console.dir(body);
 
   const { job_id: jobId, files } = body;
 
-  var remainingFiles = files;
+  var remainingFiles = Array.from(files);
 
   try {
     for (const file of files) {
@@ -111,6 +121,20 @@ async function handleMessage(message, done) {
     console.log("Files left before failure:")
     console.dir(remainingFiles);
 
+    sqsClient.sendMessage({
+      QueueUrl: config.s3sync.sqs.url,
+      MessageBody: JSON.stringify(
+        Object.assign(
+          {},
+          body,
+          { files: remainingFiles }
+        )
+      )
+    }, function(err, data) {
+      if (err) console.log("Was unable to recreate the message from SQS");
+      else     console.log("Message created again on SQS.");
+    });
+
     return done(e);
   }
 }
@@ -139,6 +163,7 @@ function noop() {}
 
 var shutdownfuncs = [];
 var s3 = setupS3Clients();
+var sqsClient = new AWS.SQS(config.credentials.euw1);
 
 function shutdown() {
     logger.warn("Caught shutdown signal.  Finishing jobs in process (send SIGTERM to forcefully kill)");
