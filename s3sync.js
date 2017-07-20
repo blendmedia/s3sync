@@ -27,7 +27,6 @@ async function handleMessage(message, done) {
   };
 
   processing = message;
-
   try {
     await sqsClient.deleteMessage(params).promise();
     console.log("Message deleted from SQS.");
@@ -146,7 +145,7 @@ async function handleMessage(message, done) {
   }
 }
 
-function sqsSync(cb) {
+function sqsSync() {
   logger.info(`Connecting to SQS queue at ${config.s3sync.sqs.url}`);
   const q = sqs.create({
     queueUrl: config.s3sync.sqs.url,
@@ -161,12 +160,10 @@ function sqsSync(cb) {
   function stop() {
     logger.info("Shutting down SQS. May take up to 30 seconds.");
     q.stop();
-    cb();
   }
   shutdownfuncs.push(stop);
 }
 
-function noop() {}
 
 let shutdownfuncs = [];
 const s3 = setupS3Clients();
@@ -187,9 +184,7 @@ function shutdown() {
   shutdownfuncs = [];
 }
 
-if (config.s3sync.sqs) {
-  sqsSync(noop);
-}
+sqsSync();
 
 if (shutdownfuncs.length > 0) {
   process.on("SIGINT", shutdown);
