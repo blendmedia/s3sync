@@ -1,22 +1,38 @@
 const AWS           = require("aws-sdk");
 const config        = require("./config");
 const fetch         = require("node-fetch");
-const logging       = require("./logging");
 const sqs           = require("sqs-consumer");
+const logging       = require("./logging");
 const logger        = logging.getLogger("s3sync");
 
 AWS.config.update(config.aws);
 
-const buckets = config.s3sync.buckets;
+const { buckets, regions } = config.s3sync;
+
+function request(url, options) {
+  const opts = {
+    ...options,
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${config.s3sync.apiToken}`,
+    },
+  };
+
+  if ("data" in options) {
+    options.body = JSON.stringify(options.data);
+  }
+
+  return fetch(`http://localhost:8080/api/${url}`, opts);
+}
 
 function setupS3Clients() {
-  const clients = {};
-  Object.keys(config.credentials).map(function(region) {
-    clients[region] = new AWS.S3(
-      config.credentials[region]
-    );
-  });
-  return clients;
+  return Object.entries(config.credentials)
+    .reduce((o, [region, credentials]) => {
+      o[region] = new AWS.S3(
+        credentials
+      );
+      return o;
+    }, {});
 }
 
 let processing = null, interruptedFiles = [];
@@ -35,24 +51,21 @@ async function handleMessage(message, done) {
   }
 
   const body = JSON.parse(message.Body);
-  console.log("Handling SQS message: ");
-  console.dir(body);
-
   const { job_id: jobId, files } = body;
+  console.log("Handling SQS message:", body);
+
   let remainingFiles = interruptedFiles = files;
   const processedFiles = [];
   try {
     for (const file of files) {
-      const src = config.s3sync.regions.filter(function(region) {
-        return region.region === buckets[0].srcregion;
-      })[0].suffix;
-
+      const src = regions.find(r => (
+        r.region === buckets[0].srcregion
+      )).suffix;
       const srcS3 = s3[src];
 
-      const dest = config.s3sync.regions.filter(function(region) {
-        return region.region === buckets[0].destregions[0];
-      })[0].suffix;
-
+      const dest = regions.find(r => (
+        r.region === buckets[0].destregions[0]
+      )).suffix;
       const destS3 = s3[dest];
 
       const params = {
@@ -63,36 +76,26 @@ async function handleMessage(message, done) {
           Key: file,
         }).createReadStream(),
       };
-
       const upload = destS3.upload(params);
 
       console.log(`Uploading ${file}...`);
-
       upload.on("httpUploadProgress", async evt => {
-        await fetch(`http://localhost:8080/api/sync_jobs/${jobId}`, {
+        await request(`sync_jobs/${jobId}`, {
           method: "PUT",
-          headers: {
-            "content-type": "application/json",
-            authorization: `Bearer ${config.s3sync.apiToken}`,
-          },
-          body: JSON.stringify({
+          data: {
             completed: false,
-          }),
+          },
         });
 
         console.log("Progress:", evt.loaded, "/", evt.total);
       });
 
       await upload.promise();
-      await fetch(`http://localhost:8080/api/sync_jobs/${jobId}`, {
+      await request(`sync_jobs/${jobId}`, {
         method: "PUT",
-        headers: {
-          "content-type": "application/json",
-          authorization: `Bearer ${config.s3sync.apiToken}`,
-        },
-        body: JSON.stringify({
+        data: {
           completed: false,
-        }),
+        },
       });
 
       remainingFiles = interruptedFiles = remainingFiles.filter(
@@ -105,15 +108,11 @@ async function handleMessage(message, done) {
       console.dir(remainingFiles);
     }
 
-    await fetch(`http://localhost:8080/api/sync_jobs/${jobId}`, {
+    await request(`sync_jobs/${jobId}`, {
       method: "PUT",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${config.s3sync.apiToken}`,
-      },
-      body: JSON.stringify({
+      data: {
         completed: true,
-      }),
+      },
     });
 
     console.log("Uploaded all files.");
