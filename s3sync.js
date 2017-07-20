@@ -10,45 +10,58 @@ var AWS = require('aws-sdk'),
 
 AWS.config.update(config.aws);
 
-var MAX_COPY_SIZE = 5 * 1024 * 1024 * 1024; // 5GB
+var buckets = config.s3sync.buckets;
 
-var getAWSLogger = _.memoize(function (category) {
-    var logger = logging.getLogger(category);
-    return {
-      log: function(o) { logger.trace(o) }
-    }
-});
+function setupS3Clients() {
+  clients = {};
 
-var commonParams = {
-    ServerSideEncryption: "AES256",
-    StorageClass: "REDUCED_REDUNDANCY"
-};
+  Object.keys(config.credentials).map(function(region, idx) {
+    clients[region] = new AWS.S3(
+      config.credentials[region]
+    );
+  });
 
-var regions = config.s3sync.regions,
-    buckets = config.s3sync.buckets;
+  return clients;
+}
 
 async function handleMessage(message, done) {
+  const body = JSON.parse(message.Body);
+  console.log("Handling SQS message: ");
+  console.dir(body);
+
+  const { job_id: jobId, files } = body;
+
+  var remainingFiles = files;
+
   try {
-    const body = JSON.parse(message.Body);
-    console.log("Handling SQS message: ");
-    console.dir(body);
-
-    const { job_id: jobId, files } = body;
-    const s3 = new AWS.S3();
-
     for (const file of files) {
+      src = config.s3sync.regions.filter(function(region) {
+        return region.region == buckets[0].srcregion;
+      })[0].suffix;
+
+      srcS3 = s3[src];
+
+      dest = config.s3sync.regions.filter(function(region) {
+        return region.region == buckets[0].destregions[0];
+      })[0].suffix;
+
+      destS3 = s3[dest];
+
       const params = {
         Bucket: buckets[0].dest,
         Key: file,
-        Body: s3.getObject({
+        Body: srcS3.getObject({
           Bucket: buckets[0].src,
           Key: file,
         }).createReadStream(),
       };
 
-      const upload = s3.upload(params);
+      const upload = destS3.upload(params);
+
+      console.log("Uploading " + file + "...");
+
       upload.on("httpUploadProgress", async evt => {
-        await fetch(`http://localhost:8080/api/sync_jobs/${jobId}`, {
+        await fetch("http://localhost:8080/api/sync_jobs/" + jobId, {
           method: "PUT",
           headers: {
             "content-type": "application/json",
@@ -58,11 +71,12 @@ async function handleMessage(message, done) {
             completed: false,
           }),
         });
+
         console.log('Progress:', evt.loaded, '/', evt.total);
       });
 
       await upload.promise();
-      await fetch(`http://localhost:8080/api/sync_jobs/${jobId}`, {
+      await fetch("http://localhost:8080/api/sync_jobs/" + jobId, {
         method: "PUT",
         headers: {
           "content-type": "application/json",
@@ -72,10 +86,16 @@ async function handleMessage(message, done) {
           completed: false,
         }),
       });
-      console.log("Done one file.")
+
+      var index = remainingFiles.indexOf(file)
+      remainingFiles.splice(index, 1);
+
+      console.log("Completed upload of " + file + ".");
+      console.log("Files remaining:")
+      console.dir(remainingFiles);
     }
 
-    await fetch(`http://localhost:8080/api/sync_jobs/${jobId}`, {
+    await fetch("http://localhost:8080/api/sync_jobs/" + jobId, {
       method: "PUT", headers: {
         "content-type": "application/json",
         "authorization": `Bearer ${config.s3sync.apiToken}`
@@ -85,9 +105,12 @@ async function handleMessage(message, done) {
       }),
     });
 
-    console.log("Done.");
+    console.log("Uploaded all files.");
     done();
   } catch(e) {
+    console.log("Files left before failure:")
+    console.dir(remainingFiles);
+
     return done(e);
   }
 }
@@ -115,6 +138,7 @@ function sqsSync(cb) {
 function noop() {}
 
 var shutdownfuncs = [];
+var s3 = setupS3Clients();
 
 function shutdown() {
     logger.warn("Caught shutdown signal.  Finishing jobs in process (send SIGTERM to forcefully kill)");
