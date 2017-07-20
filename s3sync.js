@@ -10,13 +10,12 @@ AWS.config.update(config.aws);
 const { buckets, regions } = config.s3sync;
 
 function request(url, options) {
-  const opts = {
-    ...options,
+  const opts = Object.assign({}, options, {
     headers: {
       "content-type": "application/json",
       authorization: `Bearer ${config.s3sync.apiToken}`,
     },
-  };
+  });
 
   if ("data" in options) {
     options.body = JSON.stringify(options.data);
