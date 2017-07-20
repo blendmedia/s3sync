@@ -1,9 +1,9 @@
-const AWS = require("aws-sdk"),
-  config = require("./config"),
-  fetch = require("node-fetch"),
-  logging = require("./logging"),
-  sqs = require("sqs-consumer"),
-  logger = logging.getLogger("s3sync");
+const AWS           = require("aws-sdk");
+const config        = require("./config");
+const fetch         = require("node-fetch");
+const logging       = require("./logging");
+const sqs           = require("sqs-consumer");
+const logger        = logging.getLogger("s3sync");
 
 AWS.config.update(config.aws);
 
@@ -19,26 +19,29 @@ function setupS3Clients() {
   return clients;
 }
 
+let processing = null, interruptedFiles = [];
 async function handleMessage(message, done) {
   const params = {
     QueueUrl: config.s3sync.sqs.url,
     ReceiptHandle: message.ReceiptHandle,
   };
 
-  sqsClient.deleteMessage(params, function(err) {
-    if (err) {
-      console.log("Was unable to delete the message from SQS");
-    } else     {
-      console.log("Message deleted from SQS.");
-    }
-  });
+  processing = message;
+
+  try {
+    await sqsClient.deleteMessage(params).promise();
+    console.log("Message deleted from SQS.");
+  } catch (e) {
+    console.log("Was unable to delete the message from SQS");
+  }
 
   const body = JSON.parse(message.Body);
   console.log("Handling SQS message: ");
   console.dir(body);
 
   const { job_id: jobId, files } = body;
-  const remainingFiles = Array.from(files);
+  let remainingFiles = interruptedFiles = files;
+  const processedFiles = [];
   try {
     for (const file of files) {
       const src = config.s3sync.regions.filter(function(region) {
@@ -93,8 +96,10 @@ async function handleMessage(message, done) {
         }),
       });
 
-      const index = remainingFiles.indexOf(file);
-      remainingFiles.splice(index, 1);
+      remainingFiles = interruptedFiles = remainingFiles.filter(
+        f => f !== file
+      );
+      processedFiles.push(file);
 
       console.log(`Completed upload of ${file}.`);
       console.log("Files remaining:");
@@ -136,6 +141,8 @@ async function handleMessage(message, done) {
     });
 
     return done(e);
+  } finally {
+    processing = null;
   }
 }
 
@@ -166,13 +173,17 @@ const s3 = setupS3Clients();
 const sqsClient = new AWS.SQS(config.credentials.euw1);
 
 function shutdown() {
+  if (processing) {
+    // This contains the original message object
+    console.log(processing, interruptedFiles);
+  }
   logger.warn([
     "Caught shutdown signal.",
     "Finishing jobs in process (send SIGTERM to forcefully kill)",
   ].join(" "));
-  shutdownfuncs.forEach(function(f){
+  for (const f of shutdownfuncs) {
     f();
-  });
+  }
   shutdownfuncs = [];
 }
 
