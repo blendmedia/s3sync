@@ -2,8 +2,23 @@ const rc = require("rc");
 
 const defaults = {
   aws: {
-    accessKeyId: "",
-    secretAccessKey: "",
+    maxRetries: 10,
+    retryDelayOptions: {
+      base: 1000
+    }
+  },
+
+  credentials: {
+    euw1: {
+      accessKeyId: "--REDACTED--",
+      region: "eu-west-1",
+      secretAccessKey: "--REDACTED--"
+    },
+    cnn1: {
+      accessKeyId: "--REDACTED--",
+      region: "cn-north-1",
+      secretAccessKey: "--REDACTED--"
+    }
   },
 
   log4js: {
@@ -17,22 +32,27 @@ const defaults = {
   },
 
   s3sync: {
-    regions: [
-      {
-        region: "eu-west-1",
-        suffix: ".euw1",
-      },
-    ],
+    apiToken: "--REDACTED--",
     buckets: [
       {
-        src: "blend-content",
+        src: "--REDACTED--",
         srcregion: "eu-west-1",
-        dest: "blend-chris-sync-test",
-        destregions: ["eu-west-1"],
+        dest: "--REDACTED--",
+        destregions: ["cn-north-1"]
+      }
+    ],
+    regions: [
+      {
+        region: "cn-north-1",
+        suffix: "cnn1"
       },
+      {
+        region: "eu-west-1",
+        suffix: "euw1"
+      }
     ],
     sqs: {
-      url: "https://sqs.eu-west-1.amazonaws.com/480869150897/chris-sync-test",
+      url: "--REDACTED--",
       region: "eu-west-1",
     },
   },
