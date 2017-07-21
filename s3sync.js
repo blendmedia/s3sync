@@ -34,14 +34,13 @@ function setupS3Clients() {
     }, {});
 }
 
-let processing = null, interruptedFiles = [];
+let processing = null, interruptedFiles = [], shuttingDown = false;
 async function handleMessage(message, done) {
   const params = {
     QueueUrl: config.s3sync.sqs.url,
     ReceiptHandle: message.ReceiptHandle,
   };
 
-  processing = message;
   try {
     await sqsClient.deleteMessage(params).promise();
     console.log("Message deleted from SQS.");
@@ -50,6 +49,7 @@ async function handleMessage(message, done) {
   }
 
   const body = JSON.parse(message.Body);
+  processing = body;
   const { job_id: jobId, files } = body;
   console.log("Handling SQS message:", body);
 
@@ -103,19 +103,25 @@ async function handleMessage(message, done) {
       processedFiles.push(file);
 
       console.log(`Completed upload of ${file}.`);
-      console.log("Files remaining:");
-      console.dir(remainingFiles);
+      if (shuttingDown) break;
+      else {
+        console.log("Files remaining:");
+        console.dir(remainingFiles);
+      }
+
     }
 
-    await request(`sync_jobs/${jobId}`, {
-      method: "PUT",
-      data: {
-        completed: true,
-      },
-    });
+    if (!shuttingDown) {
+      await request(`sync_jobs/${jobId}`, {
+        method: "PUT",
+        data: {
+          completed: true,
+        },
+      });
 
-    console.log("Uploaded all files.");
-    done();
+      console.log("Uploaded all files.");
+      done();
+    }
   } catch(e) {
     console.log("Files left before failure:");
     console.dir(remainingFiles);
@@ -139,7 +145,9 @@ async function handleMessage(message, done) {
 
     return done(e);
   } finally {
-    processing = null;
+    if (!shuttingDown) {
+      processing = null;
+    }
   }
 }
 
@@ -168,18 +176,39 @@ const s3 = setupS3Clients();
 const sqsClient = new AWS.SQS(config.credentials.euw1);
 
 function shutdown() {
-  if (processing) {
-    // This contains the original message object
-    console.log(processing, interruptedFiles);
+  if (!shuttingDown) {
+    shuttingDown = true;
+    logger.warn([
+      "Caught shutdown signal.",
+      "Finishing jobs in process (send SIGTERM to forcefully kill)",
+    ].join(" "));
+    if (processing) {
+      // This contains the original message object
+      console.log("Files left before interruption:");
+      console.dir(interruptedFiles);
+
+      sqsClient.sendMessage({
+        QueueUrl: config.s3sync.sqs.url,
+        MessageBody: JSON.stringify(
+          Object.assign(
+            {},
+            processing,
+            { files: interruptedFiles }
+          )
+        ),
+      }, function(err) {
+        if (err) {
+          console.log("Was unable to recreate the message from SQS");
+        } else     {
+          console.log("Message created again on SQS.");
+        }
+      });
+    }
+    for (const f of shutdownfuncs) {
+      f();
+    }
+    shutdownfuncs = [];
   }
-  logger.warn([
-    "Caught shutdown signal.",
-    "Finishing jobs in process (send SIGTERM to forcefully kill)",
-  ].join(" "));
-  for (const f of shutdownfuncs) {
-    f();
-  }
-  shutdownfuncs = [];
 }
 
 sqsSync();
